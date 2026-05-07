@@ -24,7 +24,7 @@ uploaded_file = st.file_uploader('Seleccione archivo CSV', type=['csv'])
 
 if uploaded_file is not None:
     try:
-        df = pd.read_csv(uploaded_file)
+        df = pd.read_csv(uploaded_file, skiprows=3)
 
         if 'Time' in df.columns:
             df['Time'] = pd.to_datetime(df['Time'])
