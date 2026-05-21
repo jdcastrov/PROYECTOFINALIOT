@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+from datetime import datetime
 
 # Configuración de la página
 st.set_page_config(
@@ -17,54 +18,58 @@ uploaded_file = st.file_uploader('Seleccione archivo CSV', type=['csv'])
 
 if uploaded_file is not None:
     try:
-        # Lectura de datos omitiendo metadatos si es necesario
+        # Lectura de datos omitiendo las primeras 3 líneas de metadatos del sensor
         df = pd.read_csv(uploaded_file, skiprows=3)
 
-        if 'Time' in df.columns:
-            df['Time'] = pd.to_datetime(df['Time'])
-            df = df.sort_values('Time')
-            df = df.set_index('Time')
+        # Detectar columna de tiempo sin importar mayúsculas/minúsculas
+        columna_tiempo = [col for col in df.columns if col.lower() == 'time']
+        
+        if columna_tiempo:
+            df[columna_tiempo[0]] = pd.to_datetime(df[columna_tiempo[0]])
+            df = df.sort_values(columna_tiempo[0])
+            df = df.set_index(columna_tiempo[0])
 
+        # Mapeo de variables esperadas
         variables = {
             'nivel_silo_pct': '📦 Nivel del Silo (%)',
             'flujo_agua_lpm': '💧 Flujo de Agua (L/min)',
             'peso_cosecha_kg': '⚖️ Peso Cosecha (kg)'
         }
 
-        # Filtrar solo columnas existentes en el archivo
+        # Filtrar solo columnas existentes en el archivo cargado
         v_disponibles = [v for v in variables.keys() if v in df.columns]
 
         if not v_disponibles:
-            st.error("No se encontraron las columnas esperadas en el CSV.")
+            st.error("No se encontraron las columnas esperadas en el CSV. Verifica los encabezados de las variables.")
         else:
             # --- SECCIÓN 1: MÉTRICAS EN TIEMPO REAL Y ALERTAS ---
             st.subheader("📊 Estado Actual del Nodo")
             
-            # Obtener el último registro disponible
+            # Extraer la última fila de datos (último registro del ESP32)
             ultimo_registro = df.iloc[-1]
             
             col_m1, col_m2, col_m3 = st.columns(3)
             
             with col_m1:
-                val_silo = ultimo_registro.get('nivel_silo_pct', 0)
+                val_silo = float(ultimo_registro.get('nivel_silo_pct', 0))
                 st.metric(label=variables['nivel_silo_pct'], value=f"{val_silo:.1f} %")
                 if val_silo < 20:
                     st.error("🚨 ALERTA: Nivel de silo críticamente bajo (< 20%)")
                     
             with col_m2:
-                val_flujo = ultimo_registro.get('flujo_agua_lpm', 0)
+                val_flujo = float(ultimo_registro.get('flujo_agua_lpm', 0))
                 st.metric(label=variables['flujo_agua_lpm'], value=f"{val_flujo:.2f} L/min")
                 if val_flujo > 15:
                     st.warning("⚠️ ADVERTENCIA: Flujo de agua inusualmente alto (> 15 L/min)")
                     
             with col_m3:
-                val_peso = ultimo_registro.get('peso_cosecha_kg', 0)
+                val_peso = float(ultimo_registro.get('peso_cosecha_kg', 0))
                 st.metric(label=variables['peso_cosecha_kg'], value=f"{val_peso:.1f} kg")
 
             st.markdown("---")
 
             # --- SECCIÓN 2: MEDIDORES (GAUGES) ---
-            st.subheader("⏱️ Indicadores de Nivel y Flujo")
+            st.subheader("⏱️ Indicadores en Tiempo Real")
             col_g1, col_g2, col_g3 = st.columns(3)
 
             with col_g1:
@@ -104,7 +109,6 @@ if uploaded_file is not None:
                 st.plotly_chart(fig_flujo, use_container_width=True)
 
             with col_g3:
-                # Gauge adaptativo basado en el máximo histórico del dataset actual
                 max_historico_peso = max(float(df['peso_cosecha_kg'].max()), 100.0)
                 fig_peso = go.Figure(go.Indicator(
                     mode="gauge+number",
@@ -122,7 +126,7 @@ if uploaded_file is not None:
             st.markdown("---")
 
             # --- SECCIÓN 3: PESTAÑAS DE ANÁLISIS ---
-            tab1, tab2, tab3 = st.tabs(["📈 Histórico", "🔍 Correlación", "📋 Datos Crudos"])
+            tab1, tab2, tab3 = st.tabs(["📈 Histórico", "🔍 Gráfica de Correlación", "📋 Tabla de Datos"])
 
             with tab1:
                 variable_sel = st.selectbox(
@@ -140,7 +144,7 @@ if uploaded_file is not None:
                     st.bar_chart(df[variable_sel])
 
             with tab2:
-                st.subheader("Análisis de Relación entre Variables")
+                st.subheader("Análisis de Relación entre Variables (Scatter Plot)")
                 if len(v_disponibles) >= 2:
                     col_c1, col_c2 = st.columns(2)
                     with col_c1:
@@ -153,7 +157,8 @@ if uploaded_file is not None:
                         x=var_x, 
                         y=var_y, 
                         labels={var_x: variables[var_x], var_y: variables[var_y]},
-                        template="plotly_white"
+                        template="plotly_white",
+                        color_discrete_sequence=['#2ca02c']
                     )
                     st.plotly_chart(fig_scatter, use_container_width=True)
                 else:
@@ -163,12 +168,19 @@ if uploaded_file is not None:
                 st.subheader("Exploración e Exportación de Datos")
                 st.dataframe(df, use_container_width=True)
                 
-                # Conversión de DataFrame a CSV para descarga
+                # Conversión segura a CSV
                 csv_data = df.to_csv().encode('utf-8')
+                
+                # Bloque try/except para evitar errores si el índice no tiene formato fecha
+                try:
+                    fecha_nombre = df.index.max().strftime('%Y%m%d')
+                except AttributeError:
+                    fecha_nombre = datetime.now().strftime('%Y%m%d')
+
                 st.download_button(
                     label="📥 Descargar datos en CSV",
                     data=csv_data,
-                    file_name=f"datos_nodo_{df.index.max().strftime('%Y%m%d')}.csv",
+                    file_name=f"datos_nodo_{fecha_nombre}.csv",
                     mime='text/csv'
                 )
 
