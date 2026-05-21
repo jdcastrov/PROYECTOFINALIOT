@@ -1,7 +1,9 @@
 import pandas as pd
 import streamlit as st
-from datetime import datetime
+import plotly.graph_objects as go
+import plotly.express as px
 
+# Configuración de la página
 st.set_page_config(
     page_title="Nodo Agrícola - EAFIT",
     page_icon="🌱",
@@ -9,25 +11,18 @@ st.set_page_config(
 )
 
 st.title('🌱 Análisis de Nodo Agrícola - Universidad EAFIT')
-st.markdown("Análisis de datos de nivel de silo, flujo de agua y peso de cosecha recolectados por sensores ESP32.")
-
-eafit_location = pd.DataFrame({
-    'lat': [6.2006],
-    'lon': [-75.5783],
-    'location': ['Universidad EAFIT']
-})
-
-st.subheader("📍 Ubicación de los Sensores - Universidad EAFIT")
-st.map(eafit_location, zoom=15)
+st.markdown("Monitoreo en tiempo real de nivel de silo, flujo de agua y peso de cosecha.")
 
 uploaded_file = st.file_uploader('Seleccione archivo CSV', type=['csv'])
 
 if uploaded_file is not None:
     try:
+        # Lectura de datos omitiendo metadatos si es necesario
         df = pd.read_csv(uploaded_file, skiprows=3)
 
         if 'Time' in df.columns:
             df['Time'] = pd.to_datetime(df['Time'])
+            df = df.sort_values('Time')
             df = df.set_index('Time')
 
         variables = {
@@ -36,76 +31,146 @@ if uploaded_file is not None:
             'peso_cosecha_kg': '⚖️ Peso Cosecha (kg)'
         }
 
-        variable_disponible = [v for v in variables.keys() if v in df.columns]
+        # Filtrar solo columnas existentes en el archivo
+        v_disponibles = [v for v in variables.keys() if v in df.columns]
 
-        if not variable_disponible:
+        if not v_disponibles:
             st.error("No se encontraron las columnas esperadas en el CSV.")
         else:
-            variable_sel = st.selectbox(
-                "Seleccione variable a analizar",
-                options=variable_disponible,
-                format_func=lambda x: variables[x]
-            )
+            # --- SECCIÓN 1: MÉTRICAS EN TIEMPO REAL Y ALERTAS ---
+            st.subheader("📊 Estado Actual del Nodo")
+            
+            # Obtener el último registro disponible
+            ultimo_registro = df.iloc[-1]
+            
+            col_m1, col_m2, col_m3 = st.columns(3)
+            
+            with col_m1:
+                val_silo = ultimo_registro.get('nivel_silo_pct', 0)
+                st.metric(label=variables['nivel_silo_pct'], value=f"{val_silo:.1f} %")
+                if val_silo < 20:
+                    st.error("🚨 ALERTA: Nivel de silo críticamente bajo (< 20%)")
+                    
+            with col_m2:
+                val_flujo = ultimo_registro.get('flujo_agua_lpm', 0)
+                st.metric(label=variables['flujo_agua_lpm'], value=f"{val_flujo:.2f} L/min")
+                if val_flujo > 15:
+                    st.warning("⚠️ ADVERTENCIA: Flujo de agua inusualmente alto (> 15 L/min)")
+                    
+            with col_m3:
+                val_peso = ultimo_registro.get('peso_cosecha_kg', 0)
+                st.metric(label=variables['peso_cosecha_kg'], value=f"{val_peso:.1f} kg")
 
-            tab1, tab2, tab3, tab4 = st.tabs(["📈 Visualización", "📊 Estadísticas", "🔍 Filtros", "🗺️ Sitio"])
+            st.markdown("---")
+
+            # --- SECCIÓN 2: MEDIDORES (GAUGES) ---
+            st.subheader("⏱️ Indicadores de Nivel y Flujo")
+            col_g1, col_g2, col_g3 = st.columns(3)
+
+            with col_g1:
+                fig_silo = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=val_silo,
+                    title={'text': "Nivel del Silo"},
+                    domain={'x': [0, 1], 'y': [0, 1]},
+                    gauge={
+                        'axis': {'range': [0, 100]},
+                        'bar': {'color': "darkblue"},
+                        'steps': [
+                            {'range': [0, 20], 'color': "rgba(255, 0, 0, 0.3)"},
+                            {'range': [20, 100], 'color': "rgba(0, 255, 0, 0.1)"}
+                        ]
+                    }
+                ))
+                fig_silo.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_silo, use_container_width=True)
+
+            with col_g2:
+                fig_flujo = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=val_flujo,
+                    title={'text': "Flujo de Agua"},
+                    domain={'x': [0, 1], 'y': [0, 1]},
+                    gauge={
+                        'axis': {'range': [0, 30]},
+                        'bar': {'color': "teal"},
+                        'steps': [
+                            {'range': [0, 15], 'color': "rgba(0, 255, 0, 0.1)"},
+                            {'range': [15, 30], 'color': "rgba(255, 165, 0, 0.3)"}
+                        ]
+                    }
+                ))
+                fig_flujo.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_flujo, use_container_width=True)
+
+            with col_g3:
+                # Gauge adaptativo basado en el máximo histórico del dataset actual
+                max_historico_peso = max(float(df['peso_cosecha_kg'].max()), 100.0)
+                fig_peso = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=val_peso,
+                    title={'text': "Peso Cosecha"},
+                    domain={'x': [0, 1], 'y': [0, 1]},
+                    gauge={
+                        'axis': {'range': [0, max_historico_peso]},
+                        'bar': {'color': "darkgreen"}
+                    }
+                ))
+                fig_peso.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_peso, use_container_width=True)
+
+            st.markdown("---")
+
+            # --- SECCIÓN 3: PESTAÑAS DE ANÁLISIS ---
+            tab1, tab2, tab3 = st.tabs(["📈 Histórico", "🔍 Correlación", "📋 Datos Crudos"])
 
             with tab1:
-                st.subheader(f'Visualización - {variables[variable_sel]}')
+                variable_sel = st.selectbox(
+                    "Seleccione variable para el gráfico histórico",
+                    options=v_disponibles,
+                    format_func=lambda x: variables[x]
+                )
                 chart_type = st.selectbox("Tipo de gráfico", ["Línea", "Área", "Barra"])
+                
                 if chart_type == "Línea":
                     st.line_chart(df[variable_sel])
                 elif chart_type == "Área":
                     st.area_chart(df[variable_sel])
                 else:
                     st.bar_chart(df[variable_sel])
-                if st.checkbox('Mostrar datos crudos'):
-                    st.write(df)
 
             with tab2:
-                st.subheader('Análisis Estadístico')
-                stats = df[variable_sel].describe()
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.dataframe(stats)
-                with col2:
-                    st.metric("Promedio", f"{stats['mean']:.2f}")
-                    st.metric("Máximo", f"{stats['max']:.2f}")
-                    st.metric("Mínimo", f"{stats['min']:.2f}")
-                    st.metric("Desviación Estándar", f"{stats['std']:.2f}")
+                st.subheader("Análisis de Relación entre Variables")
+                if len(v_disponibles) >= 2:
+                    col_c1, col_c2 = st.columns(2)
+                    with col_c1:
+                        var_x = st.selectbox("Variable Eje X", options=v_disponibles, format_func=lambda x: variables[x], index=0)
+                    with col_c2:
+                        var_y = st.selectbox("Variable Eje Y", options=v_disponibles, format_func=lambda x: variables[x], index=1 if len(v_disponibles) > 1 else 0)
+                    
+                    fig_scatter = px.scatter(
+                        df, 
+                        x=var_x, 
+                        y=var_y, 
+                        labels={var_x: variables[var_x], var_y: variables[var_y]},
+                        template="plotly_white"
+                    )
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+                else:
+                    st.warning("Se requieren al menos 2 variables numéricas en el archivo para trazar correlaciones.")
 
             with tab3:
-                st.subheader('Filtros de Datos')
-                min_v = float(df[variable_sel].min())
-                max_v = float(df[variable_sel].max())
-                mean_v = float(df[variable_sel].mean())
-                if min_v == max_v:
-                    st.warning(f"Todos los valores son iguales: {min_v:.2f}")
-                else:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        min_val = st.slider('Valor mínimo', min_v, max_v, mean_v, key="min_val")
-                        st.write(f"Registros superiores a {min_val:.2f}:")
-                        st.dataframe(df[df[variable_sel] > min_val])
-                    with col2:
-                        max_val = st.slider('Valor máximo', min_v, max_v, mean_v, key="max_val")
-                        st.write(f"Registros inferiores a {max_val:.2f}:")
-                        st.dataframe(df[df[variable_sel] < max_val])
-
-            with tab4:
-                st.subheader("Información del Sitio")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("### Ubicación del Sensor")
-                    st.write("**Universidad EAFIT**")
-                    st.write("- Latitud: 6.2006")
-                    st.write("- Longitud: -75.5783")
-                    st.write("- Altitud: ~1,495 msnm")
-                with col2:
-                    st.write("### Detalles del Sensor")
-                    st.write("- Tipo: ESP32")
-                    st.write("- Variables: Nivel silo, Flujo agua, Peso cosecha")
-                    st.write("- Frecuencia: 5 segundos")
-                    st.write("- Ubicación: Campus universitario")
+                st.subheader("Exploración e Exportación de Datos")
+                st.dataframe(df, use_container_width=True)
+                
+                # Conversión de DataFrame a CSV para descarga
+                csv_data = df.to_csv().encode('utf-8')
+                st.download_button(
+                    label="📥 Descargar datos en CSV",
+                    data=csv_data,
+                    file_name=f"datos_nodo_{df.index.max().strftime('%Y%m%d')}.csv",
+                    mime='text/csv'
+                )
 
     except Exception as e:
         st.error(f'Error al procesar el archivo: {str(e)}')
