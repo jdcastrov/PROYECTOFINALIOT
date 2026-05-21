@@ -102,7 +102,7 @@ if uploaded_file is not None:
                     label=variables['flujo_agua_lpm'], 
                     value=f"{val_flujo:.2f} L/min", 
                     delta=f"{delta_flujo:+.2f} L/min respecto al anterior",
-                    delta_color="inverse"  # Cambia a rojo si sube el flujo (alertas de gasto de agua)
+                    delta_color="inverse"
                 )
                 if val_flujo > 15:
                     st.warning("⚠️ ADVERTENCIA: Flujo de agua inusualmente alto (> 15 L/min)")
@@ -204,19 +204,33 @@ if uploaded_file is not None:
                     with col_c2:
                         var_y = st.selectbox("Variable Eje Y", options=v_disponibles, format_func=lambda x: variables[x], index=1 if len(v_disponibles) > 1 else 0)
                     
-                    # Generar gráfica con o sin línea de tendencia según el sidebar
-                    trend_mode = "ols" if mostrar_tendencia else None
-                    
-                    fig_scatter = px.scatter(
-                        df, 
-                        x=var_x, 
-                        y=var_y, 
-                        labels={var_x: variables[var_x], var_y: variables[var_y]},
-                        template="plotly_white",
-                        color_discrete_sequence=['#2ca02c'],
-                        trendline=trend_mode
-                    )
-                    st.plotly_chart(fig_scatter, use_container_width=True)
+                    # VALIDACIÓN CRÍTICA: Control de variables idénticas en ambos ejes
+                    if var_x == var_y:
+                        st.warning("💡 Estás comparando una variable contra sí misma. La línea de tendencia se desactivará automáticamente ya que la correlación matemática es perfecta.")
+                        
+                        fig_scatter = px.scatter(
+                            df, 
+                            x=var_x, 
+                            y=var_y, 
+                            labels={var_x: variables[var_x], var_y: variables[var_y]},
+                            template="plotly_white",
+                            color_discrete_sequence=['#2ca02c']
+                        )
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+                    else:
+                        # Si las variables son diferentes, aplica el modo seleccionado en la barra lateral de forma segura
+                        trend_mode = "ols" if mostrar_tendencia else None
+                        
+                        fig_scatter = px.scatter(
+                            df, 
+                            x=var_x, 
+                            y=var_y, 
+                            labels={var_x: variables[var_x], var_y: variables[var_y]},
+                            template="plotly_white",
+                            color_discrete_sequence=['#2ca02c'],
+                            trendline=trend_mode
+                        )
+                        st.plotly_chart(fig_scatter, use_container_width=True)
                 else:
                     st.warning("Se requieren al menos 2 variables numéricas en el archivo para trazar correlaciones.")
 
